@@ -1,0 +1,424 @@
+/**
+ * Issue recommendation service for scoring and ranking GitHub issues based on user profile
+ */
+
+const IssueFilterService = require('./issueFilterService');
+
+/**
+ * Score issues based on user profile and repository context
+ * @param {Array} issues - Array of issue objects from GitHub (normalized)
+ * @param {Object} user - User profile object
+ * @param {Object} repository - Normalized repository object (for language context)
+ * @returns {Array} Issues with matchScore and matchReasons added
+ */
+const scoreIssues = (issues, user, repository) => {
+  if (!issues || !Array.isArray(issues)) {
+    return [];
+  }
+
+  if (!user) {
+    // If no user, return issues with zero score
+    return issues.map(issue => ({
+      ...issue,
+      matchScore: 0,
+      matchReasons: ['No user profile provided']
+    }));
+  }
+
+  return issues.map(issue => {
+    const languageScore = computeLanguageMatch(issue, user, repository);
+    const skillScore = computeSkillMatch(issue, user);
+    const experienceScore = computeExperienceMatch(issue, user, repository);
+    const interestScore = computeInterestMatch(issue, user);
+    const timeScore = computeTimeMatch(issue, user, repository);
+
+    // Weighted score
+    const matchScore = (
+      languageScore * 0.3 +
+      skillScore * 0.3 +
+      experienceScore * 0.2 +
+      interestScore * 0.1 +
+      timeScore * 0.1
+    );
+
+    // Generate human-readable reasons
+    const matchReasons = generateMatchReasons(
+      issue, user, repository,
+      languageScore, skillScore, experienceScore, interestScore, timeScore
+    );
+
+    return {
+      ...issue,
+      matchScore: parseFloat(matchScore.toFixed(2)), // Keep 2 decimal places
+      matchReasons
+    };
+  });
+};
+
+/**
+ * Compute language match score (0-1)
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @param {Object} repository - Repository object
+ * @returns {number} Score between 0 and 1
+ */
+const computeLanguageMatch = (issue, user, repository) => {
+  if (!user.languages || user.languages.length === 0) {
+    return 1.0; // No preference, full score
+  }
+
+  if (!repository || !repository.language) {
+    return 0.0; // Repository language not available
+  }
+
+  const repoLanguage = repository.language.trim().toLowerCase();
+  const match = user.languages.some(lang =>
+    lang.trim().toLowerCase() === repoLanguage
+  );
+
+  return match ? 1.0 : 0.0;
+};
+
+/**
+ * Compute skill match score (0-1)
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @returns {number} Score between 0 and 1
+ */
+const computeSkillMatch = (issue, user) => {
+  if (!user.skills || user.skills.length === 0) {
+    return 1.0; // No preference, full score
+  }
+
+  const issueText = [
+    issue.title || '',
+    issue.description || '',
+    ...(issue.labels || []).map(label => label.name || '')
+  ].join(' ').toLowerCase();
+
+  let matchedSkills = 0;
+  user.skills.forEach(skill => {
+    const normalizedSkill = skill.trim().toLowerCase();
+    if (issueText.includes(normalizedSkill)) {
+      matchedSkills++;
+    }
+  });
+
+  // Avoid division by zero
+  if (user.skills.length === 0) return 1.0;
+  return matchedSkills / user.skills.length;
+};
+
+/**
+ * Compute experience/match score (0-1)
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @param {Object} repository - Repository object
+ * @returns {number} Score between 0 and 1
+ */
+const computeExperienceMatch = (issue, user, repository) => {
+  if (!user.experienceLevel || user.experienceLevel.trim() === '') {
+    return 1.0; // No preference, full score
+  }
+
+  const level = user.experienceLevel.trim().toLowerCase();
+
+  // Check for explicit experience labels on the issue
+  const issueLabels = (issue.labels || []).map(label => label.name.toLowerCase());
+  const hasBeginnerLabel = issueLabels.some(label =>
+    ['beginner', 'good first issue', 'easy', 'help wanted'].includes(label)
+  );
+  const hasAdvancedLabel = issueLabels.some(label =>
+    ['advanced', 'hard', 'difficult', 'expert'].includes(label)
+  );
+
+  // If issue has explicit labels, we can score based on match
+  if (hasBeginnerLabel && !hasAdvancedLabel) {
+    return level === 'beginner' ? 1.0 : 0.0;
+  }
+  if (hasAdvancedLabel && !hasBeginnerLabel) {
+    return level === 'advanced' ? 1.0 : 0.0;
+  }
+  // If both or neither explicit labels, we fall back to repository-based assessment
+
+  if (!repository) {
+    // If no repository context, we can only rely on issue labels
+    // If no explicit labels, we assume it's suitable for all levels (neutral)
+    return !(hasBeginnerLabel || hasAdvancedLabel) ? 0.5 : 0.0;
+  }
+
+  // Use repository signals to compute a continuous score
+  const starsScore = Math.min(1, Math.log10((repository.stars || 0) + 1) / 5);
+  const forksScore = Math.min(1, Math.log10((repository.forks || 0) + 1) / 4);
+  const issuesScore = Math.min(1, (repository.openIssues || 0) / 100);
+  const activityScore = calculateActivityScore(repository.updatedAt);
+
+  const compositeScore = (
+    starsScore * 0.3 +
+    forksScore * 0.2 +
+    issuesScore * 0.2 +
+    activityScore * 0.3
+  );
+
+  // Map composite score to experience level suitability
+  let score = 0.5; // Default neutral
+  switch (level) {
+    case 'beginner':
+      // Beginners prefer compositeScore between 0.2 and 0.7
+      if (compositeScore >= 0.2 && compositeScore <= 0.7) {
+        score = 1.0;
+      } else if (compositeScore < 0.2) {
+        score = compositeScore / 0.2; // Linear from 0 to 0.2
+      } else { // compositeScore > 0.7
+        score = (1.0 - compositeScore) / 0.3; // Linear from 0.7 to 1.0
+      }
+      break;
+    case 'intermediate':
+      // Intermediate users prefer compositeScore between 0.1 and 0.9
+      if (compositeScore >= 0.1 && compositeScore <= 0.9) {
+        score = 1.0;
+      } else if (compositeScore < 0.1) {
+        score = compositeScore / 0.1; // Linear from 0 to 0.1
+      } else { // compositeScore > 0.9
+        score = (1.0 - compositeScore) / 0.1; // Linear from 0.9 to 1.0
+      }
+      break;
+    case 'advanced':
+      // Advanced users prefer high compositeScore OR (medium compositeScore and high activity)
+      if (compositeScore >= 0.6) {
+        score = 1.0;
+      } else if (compositeScore >= 0.3 && activityScore >= 0.7) {
+        score = 1.0;
+      } else {
+        // Linear interpolation: 0 when compositeScore<0.3 and activityScore<0.7
+        // We'll use a simple combination
+        score = (compositeScore * 0.5 + activityScore * 0.5) / 0.5; // Scale to 0-1? Not perfect
+        // Instead, we'll do: if compositeScore<0.3, score=compositeScore/0.3; if activityScore<0.7, score=activityScore/0.7; then take max?
+        // For simplicity, we'll use the average of the two normalized scores
+        const normComposite = compositeScore / 0.3; // 0-1 for 0-0.3
+        const normActivity = activityScore / 0.7; // 0-1 for 0-0.7
+        score = Math.min(1.0, (normComposite + normActivity) / 2);
+      }
+      break;
+    default:
+      score = 1.0;
+  }
+
+  // Ensure score is between 0 and 1
+  return Math.max(0, Math.min(1, score));
+};
+
+/**
+ * Calculate activity score based on repository update frequency
+ * @param {string} updatedAt - ISO date string from GitHub
+ * @returns {number} Activity score between 0-1 (1 = very recent)
+ */
+const calculateActivityScore = (updatedAt) => {
+  if (!updatedAt) return 0;
+
+  const updatedDate = new Date(updatedAt);
+  const now = new Date();
+  const diffTime = Math.abs(now - updatedDate);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  // Activity scoring:
+  // - Updated within 7 days: 1.0
+  // - Updated within 30 days: 0.7
+  // - Updated within 90 days: 0.4
+  // - Updated within 180 days: 0.2
+  // - Older than 180 days: 0.0
+  if (diffDays <= 7) return 1.0;
+  if (diffDays <= 30) return 0.7;
+  if (diffDays <= 90) return 0.4;
+  if (diffDays <= 180) return 0.2;
+  return 0.0;
+};
+
+/**
+ * Compute interest match score (0-1)
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @returns {number} Score between 0 and 1
+ */
+const computeInterestMatch = (issue, user) => {
+  if (!user.interests || user.interests.length === 0) {
+    return 1.0; // No preference, full score
+  }
+
+  const issueText = [
+    issue.title || '',
+    issue.description || '',
+    ...(issue.labels || []).map(label => label.name || '')
+  ].join(' ').toLowerCase();
+
+  let matchedInterests = 0;
+  user.interests.forEach(interest => {
+    const normalizedInterest = interest.trim().toLowerCase();
+    if (issueText.includes(normalizedInterest)) {
+      matchedInterests++;
+    }
+  });
+
+  // Avoid division by zero
+  if (user.interests.length === 0) return 1.0;
+  return matchedInterests / user.interests.length;
+};
+
+/**
+ * Compute time match score (0-1)
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @param {Object} repository - Repository object
+ * @returns {number} Score between 0 and 1
+ */
+const computeTimeMatch = (issue, user, repository) => {
+  if (!user.availableHours || user.availableHours.trim() === '') {
+    return 1.0; // No preference, full score
+  }
+
+  // Parse availableHours (expected format: "X-Y hrs/week" or "Z hrs/week")
+  const hoursMatch = user.availableHours.match(/(\d+)\s*-\s*(\d+)\s*hrs?\/week/i) ||
+                     user.availableHours.match(/(\d+)\s*hrs?\/week/i);
+
+  let maxHoursPerWeek = 0;
+  if (hoursMatch) {
+    if (hoursMatch.length === 3) { // Range format: "X-Y hrs/week"
+      maxHoursPerWeek = parseInt(hoursMatch[2]); // Take the upper bound
+    } else if (hoursMatch.length === 2) { // Single value: "Z hrs/week"
+      maxHoursPerWeek = parseInt(hoursMatch[1]);
+    }
+  } else {
+    // If format is not recognized, try to extract any number
+    const numMatch = user.availableHours.match(/(\d+)/);
+    if (numMatch) {
+      maxHoursPerWeek = parseInt(numMatch[1]);
+    } else {
+      // Cannot parse, assume no restriction
+      return 1.0;
+    }
+  }
+
+  // Calculate time commitment score based on repository activity
+  const activityScore = calculateActivityScore(
+    repository ? repository.updatedAt : null
+  );
+
+  // Invert activity score: less active = lower time commitment needed
+  const timeCommitmentScore = 1.0 - activityScore;
+
+  // Normalize user's available time to 0-1 scale (assuming max 20 hrs/week as high)
+  const normalizedUserTime = Math.min(1, maxHoursPerWeek / 20);
+
+  // User can handle repository if their available time >= required time commitment
+  // We'll return a score that is 1.0 when normalizedUserTime >= timeCommitmentScore * 0.8
+  // and linearly decreases to 0 when normalizedUserTime is 0
+  const requiredTime = timeCommitmentScore * 0.8;
+  if (normalizedUserTime >= requiredTime) {
+    return 1.0;
+  } else if (normalizedUserTime <= 0) {
+    return 0.0;
+  } else {
+    return normalizedUserTime / requiredTime;
+  }
+};
+
+/**
+ * Generate human-readable reasons for the match
+ * @param {Object} issue - Issue object
+ * @param {Object} user - User profile object
+ * @param {Object} repository - Repository object
+ * @param {number} languageScore - Language match score (0-1)
+ * @param {number} skillScore - Skill match score (0-1)
+ * @param {number} experienceScore - Experience match score (0-1)
+ * @param {number} interestScore - Interest match score (0-1)
+ * @param {number} timeScore - Time match score (0-1)
+ * @returns {Array<string>} Reasons
+ */
+const generateMatchReasons = (issue, user, repository, languageScore, skillScore, experienceScore, interestScore, timeScore) => {
+  const reasons = [];
+
+  // Language match
+  if (languageScore === 1.0) {
+    if (user.languages && user.languages.length > 0) {
+      reasons.push(`Language match: ${repository.language}`);
+    } else {
+      reasons.push('No language preference');
+    }
+  } else if (languageScore === 0.0 && user.languages && user.languages.length > 0) {
+    reasons.push(`Language mismatch: prefers ${user.languages.join(', ')}, got ${repository.language}`);
+  }
+
+  // Skill match
+  if (skillScore > 0) {
+    const matchedSkills = user.skills.filter(skill => {
+      const issueText = [
+        issue.title || '',
+        issue.description || '',
+        ...(issue.labels || []).map(label => label.name || '')
+      ].join(' ').toLowerCase();
+      return issueText.includes(skill.trim().toLowerCase());
+    });
+    if (matchedSkills.length > 0) {
+      reasons.push(`Skills match: ${matchedSkills.join(', ')}`);
+    }
+  } else if (user.skills && user.skills.length > 0) {
+    reasons.push('No skill matches found');
+  }
+
+  // Experience match
+  if (experienceScore === 1.0) {
+    if (user.experienceLevel && user.experienceLevel.trim() !== '') {
+      reasons.push(`Experience level ${user.experienceLevel} suitable`);
+    } else {
+      reasons.push('No experience preference');
+    }
+  } else if (experienceScore === 0.0 && user.experienceLevel && user.experienceLevel.trim() !== '') {
+    reasons.push(`Experience level ${user.experienceLevel} may not be suitable`);
+  }
+
+  // Interest match
+  if (interestScore > 0) {
+    const matchedInterests = user.interests.filter(interest => {
+      const issueText = [
+        issue.title || '',
+        issue.description || '',
+        ...(issue.labels || []).map(label => label.name || '')
+      ].join(' ').toLowerCase();
+      return issueText.includes(interest.trim().toLowerCase());
+    });
+    if (matchedInterests.length > 0) {
+      reasons.push(`Interests match: ${matchedInterests.join(', ')}`);
+    }
+  } else if (user.interests && user.interests.length > 0) {
+    reasons.push('No interest matches found');
+  }
+
+  // Time match
+  if (timeScore === 1.0) {
+    if (user.availableHours && user.availableHours.trim() !== '') {
+      reasons.push('Time commitment suitable');
+    } else {
+      reasons.push('No time preference');
+    }
+  } else if (timeScore === 0.0 && user.availableHours && user.availableHours.trim() !== '') {
+    reasons.push('Time commitment may be too high');
+  }
+
+  // If no reasons added, add a generic one
+  if (reasons.length === 0) {
+    reasons.push('General match based on profile');
+  }
+
+  return reasons;
+};
+
+module.exports = {
+  scoreIssues,
+  computeLanguageMatch,
+  computeSkillMatch,
+  computeExperienceMatch,
+  computeInterestMatch,
+  computeTimeMatch,
+  generateMatchReasons,
+  calculateActivityScore
+};

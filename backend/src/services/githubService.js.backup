@@ -1,0 +1,77 @@
+const axios = require('axios');
+require('dotenv').config();
+
+const GITHUB_BASE_URL = 'https://api.github.com';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // Optional for higher rate limits
+
+// Create axios instance with default headers
+const githubApi = axios.create({
+  baseURL: GITHUB_BASE_URL,
+  headers: {
+    'Accept': 'application/vnd.github.v3+json',
+    ...(GITHUB_TOKEN && { 'Authorization': `token ${GITHUB_TOKEN}` })
+  }
+});
+
+/**
+ * Search for repositories using GitHub's search API
+ * @param {Object} queryParams - Search parameters
+ * @returns {Promise<Array>} Normalized repository data
+ */
+const searchRepositories = async (queryParams) => {
+  try {
+    const response = await githubApi.get('/search/repositories', {
+      params: queryParams
+    });
+
+    // Normalize and extract relevant repository data
+    return response.data.items.map(repo => normalizeRepositoryData(repo));
+  } catch (error) {
+    console.error('GitHub repository search error:', error.response?.data || error.message);
+    throw new Error('Failed to search repositories');
+  }
+};
+
+/**
+ * Get details for a specific repository
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @returns {Promise<Object>} Normalized repository data
+ */
+const getRepositoryByOwnerAndName = async (owner, repo) => {
+  try {
+    const response = await githubApi.get(`/repos/${owner}/${repo}`);
+    return normalizeRepositoryData(response.data);
+  } catch (error) {
+    console.error('GitHub get repository error:', error.response?.data || error.message);
+    throw new Error('Failed to get repository details');
+  }
+};
+
+/**
+ * Normalize GitHub repository data to our application format
+ * @param {Object} githubRepo - Raw GitHub repository data
+ * @returns {Object} Normalized repository data
+ */
+const normalizeRepositoryData = (githubRepo) => {
+  return {
+    githubId: githubRepo.id,
+    name: githubRepo.name,
+    fullName: githubRepo.full_name,
+    owner: githubRepo.owner.login,
+    description: githubRepo.description || '',
+    url: githubRepo.html_url,
+    language: githubRepo.language || '',
+    topics: githubRepo.topics || [],
+    stars: githubRepo.stargazers_count || 0,
+    forks: githubRepo.forks_count || 0,
+    openIssues: githubRepo.open_issues_count || 0,
+    updatedAt: githubRepo.updated_at,
+    license: githubRepo.license ? githubRepo.license.name : null
+  };
+};
+
+module.exports = {
+  searchRepositories,
+  getRepositoryByOwnerAndName
+};

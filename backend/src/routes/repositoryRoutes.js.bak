@@ -1,0 +1,16 @@
+const express = require('express');
+const { searchRepositoriesController, getRepositoryController, getRepositoryIssuesController } = require('../controllers/repositoryController');
+const { protect } = require('../middleware/authMiddleware');
+
+const router = express.Router();
+
+// Protect all repository routes
+router.use(protect);
+
+router.get('/test', (req, res) => { res.json({msg: 'test route'}); });
+router.get('/debug', (req, res) => { res.json({msg: 'debug route', userId: req.user ? req.user._id : null}); });
+
+router.get('/search', searchRepositoriesController);
+router.get("/:owner/:repo/issues", getRepositoryIssuesController);
+
+module.exports = router;

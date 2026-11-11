@@ -1,0 +1,8 @@
+Server starting...
+◇ injected env (4) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+authMiddleware loaded
+◇ injected env (0) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Filtered repository routes loaded
+Repository routes mounted
+Server is running on port 5000
+MongoDB Connected: localhost

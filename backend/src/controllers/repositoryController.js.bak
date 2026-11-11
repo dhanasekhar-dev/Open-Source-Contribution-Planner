@@ -1,0 +1,101 @@
+const User = require('../models/User');
+const { searchRepositories, getRepositoryByOwnerAndName } = require('../services/githubService');
+
+/**
+ * @desc    Search repositories based on user profile
+ * @route   GET /api/repositories/search
+ * @access  Private
+ */
+const searchRepositoriesController = async (req, res) => {
+  try {
+    // Get user ID from authenticated request (set by authMiddleware)
+    const userId = req.user._id;
+
+    // Fetch user profile to get preferences for search query
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Build GitHub search query from user profile
+    const query = buildSearchQuery(user);
+
+    // Search GitHub repositories
+    const repositories = await searchRepositories({ q: query });
+
+    res.status(200).json({
+      success: true,
+      count: repositories.length,
+      repositories
+    });
+  } catch (error) {
+    console.error('Repository search controller error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+/**
+ * @desc    Get details for a specific repository
+ * @route   GET /api/repositories/:owner/:repo
+ * @access  Private
+ */
+const getRepositoryController = async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+
+    const repository = await getRepositoryByOwnerAndName(owner, repo);
+
+    res.status(200).json({
+      success: true,
+      repository
+    });
+  } catch (error) {
+    console.error('Get repository controller error:', error);
+    if (error.message === 'Failed to get repository details') {
+      return res.status(404).json({ success: false, message: 'Repository not found' });
+    }
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+/**
+ * Build GitHub search query string from user profile
+ * @param {Object} user - User profile object
+ * @returns {string} GitHub search query
+ */
+const buildSearchQuery = (user) => {
+  const queryParts = [];
+
+  // Add language preferences
+  if (user.languages && user.languages.length > 0) {
+    user.languages.forEach(lang => {
+      if (lang.trim()) queryParts.push(`language:${lang.trim()}`);
+    });
+  }
+
+  // Add interest/topic preferences
+  if (user.interests && user.interests.length > 0) {
+    user.interests.forEach(interest => {
+      if (interest.trim()) queryParts.push(`topic:${interest.trim()}`);
+    });
+  }
+
+  // Add skills as topics (optional, may be too specific)
+  if (user.skills && user.skills.length > 0) {
+    user.skills.forEach(skill => {
+      if (skill.trim()) queryParts.push(`topic:${skill.trim()}`);
+    });
+  }
+
+  // If no specific preferences, search for popular repositories
+  if (queryParts.length === 0) {
+    queryParts.push('stars:>1'); // At least one star to avoid empty results
+  }
+
+  return queryParts.join(' ');
+};
+
+module.exports = {
+  searchRepositoriesController,
+  getRepositoryController
+};

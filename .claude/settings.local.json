@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rtk curl *)",
+      "Bash(jobs *)",
+      "Bash(curl -v http://localhost:5000/api/)",
+      "Bash(rtk grep *)",
+      "Bash(curl -v http://localhost:5000/)",
+      "Bash(curl -v http://localhost:5000/api/repositories/)",
+      "Bash(curl -v http://localhost:5000/api/repositories/search)",
+      "Bash(rtk read *)",
+      "Bash(taskkill *)",
+      "Bash(tasklist)",
+      "WebFetch(domain:localhost)",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"test8607@example.com\",\"password\":\"test123\"}')",
+      "Bash(npm start *)",
+      "Bash(pkill *)",
+      "Bash(curl *)"
+    ]
+  }
+}
